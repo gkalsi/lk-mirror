@@ -7,5 +7,5 @@ MODULES += \
 	app/stringtests \
 	app/tests \
 	lib/cksum \
-	lib/debugcommands \
+	lib/debugcommands
 

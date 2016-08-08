@@ -18,12 +18,12 @@
 
 #include <stdlib.h>
 #include <stdio.h>
-#include <kernel.h>
-#include <interrupt.h>
-#include <usb_core_driver.h>
-#include <usb_hub_driver.h>
-#include <usb_std_defs.h>
-#include <usb_subsystem.h>
+// #include <kernel.h>
+// #include <interrupt.h>
+#include <platform/usbcore/usb_core_driver.h>
+#include <platform/usbcore/usb_hub_driver.h>
+#include <platform/usbcore/usb_std_defs.h>
+#include <platform/usbcore/usb_subsystem.h>
 
 #if !USB_EMBEDDED
 
@@ -368,7 +368,7 @@ usb_get_ascii_string(struct usb_device *dev, uint32_t iString,
     }
 
     /* "Translate" the string from UTF-16LE to ASCII.  */
-    num_chars = min((buf.desc.bLength - sizeof(struct usb_descriptor_header)) /
+    num_chars = MIN((buf.desc.bLength - sizeof(struct usb_descriptor_header)) /
                                 sizeof(uint16_t), strbufsize - 1);
     utf16le_to_ascii(buf.desc.bString, num_chars, strbuf);
     strbuf[num_chars] = '\0';
@@ -647,14 +647,16 @@ void usbinfo(void)
 {
 #if USB_EMBEDDED
     fprintf(stderr, "usbinfo not supported in USB_EMBEDDED mode.\n");
-    return SYSERR;
+    // return SYSERR;
+    return;
 #else
     struct usb_device *root_hub = usb_root_hub;
 
     if (root_hub == NULL)
     {
         fprintf(stderr, "USB subsystem not initialized.\n");
-        return SYSERR;
+        // return SYSERR;
+        return;
     }
 
     /* USB is a dynamic bus and devices may be attached/detached at any time.
@@ -668,7 +670,8 @@ void usbinfo(void)
     printf("\nDiagram of USB:\n\n");
     usb_hub_for_device_in_tree(root_hub, usbinfo_tree_callback);
     usb_unlock_bus();
-    return OK;
+    // return OK;
+    return;
 #endif /* !USB_EMBEDDED */
 }
 

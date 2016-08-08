@@ -8,7 +8,7 @@
 #ifndef _USB_DWC_REGS_H_
 #define _USB_DWC_REGS_H_
 
-#include <platform/usbcore/usb_util.h>
+// #include <usb_util.h>
 
 /**
  * Number of DWC host channels, each of which can be used for an independent

@@ -12,6 +12,7 @@
 
 #include <kernel/thread.h>
 #include <kernel/semaphore.h>
+#include <kernel/event.h>
 #include <platform/usbcore/usb_std_defs.h>
 #include <platform/usbcore/usb_util.h>
 
@@ -99,7 +100,7 @@ struct usb_xfer_request
      *********************/
 
     /** Status of the transfer: ::USB_STATUS_SUCCESS if successful, or another
-     * ::usb_status_t error code if the transfer failed.  ::USB_STATUS_SUCCESS
+     * ::usb_status_t error code ift he transfer failed.  ::USB_STATUS_SUCCESS
      * is set if exactly the requested number of bytes were transferred with no
      * error, or if the transfer was device-to-host (IN) and completed with no
      * error but returned fewer bytes than requested.  */
@@ -127,8 +128,12 @@ struct usb_xfer_request
     uint attempted_packets_remaining;
     uint attempted_bytes_remaining;
     uint csplit_retries;
-    thread_t deferer_thread_tid;
+    thread_t *deferer_thread_tid;
+
     semaphore_t deferer_thread_sema;
+    bool deferer_sema_ready;
+
+    event_t evt;
 };
 
 /**

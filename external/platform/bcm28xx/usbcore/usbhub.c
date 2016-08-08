@@ -54,11 +54,17 @@
  */
 
 #include <stdlib.h>
-#include <thread.h>
-#include <usb_core_driver.h>
-#include <usb_hub_defs.h>
-#include <usb_hub_driver.h>
-#include <usb_std_defs.h>
+#include <string.h>
+#include <err.h>
+#include <trace.h>
+#include <kernel/thread.h>
+#include <kernel/semaphore.h>
+#include <platform/usbcore/usb_core_driver.h>
+#include <platform/usbcore/usb_hub_defs.h>
+#include <platform/usbcore/usb_hub_driver.h>
+#include <platform/usbcore/usb_std_defs.h>
+
+#define LOCAL_TRACE 0
 
 /** Maximum number of ports per hub supported by this driver.  (USB 2.0
  * theoretically allows up to 255 ports per hub.)  */
@@ -84,7 +90,7 @@ struct usb_port
 /** This driver's representation of a USB hub.  */
 struct usb_hub
 {
-    /** TRUE if this hub structure is being used.  */
+    /** true if this hub structure is being used.  */
     bool inuse;
 
     /** Pointer to the USB device of this hub.  */
@@ -117,16 +123,16 @@ static struct usb_hub          hub_structs[MAX_NUSBHUBS];
 
 /** Bitmask of hubs that have status changes pending.  Note: this can be
  * modified from an interrupt handler in hub_status_changed().  */
-static uint32_t hub_status_change_pending;
+static volatile uint32_t hub_status_change_pending;
 
 /** Semaphore for signaling hub thread when a status change has occurred.  */
-static semaphore hub_status_change_sema;
+static semaphore_t hub_status_change_sema;
 
 /** Thread ID of the hub thread (hub_thread()).  */
-static tid_typ hub_thread_tid = BADTID;
+static thread_t *hub_thread_tid = NULL;
 
 /* Allocate a hub structure and associated status change request.  */
-static int hub_alloc(void)
+static status_t hub_alloc(void)
 {
     uint i;
     static uint nexthub;
@@ -139,18 +145,18 @@ static int hub_alloc(void)
         nexthub = (nexthub + 1) % MAX_NUSBHUBS;
         if (!hub_structs[nexthub].inuse)
         {
-            bzero(&hub_structs[nexthub], sizeof(struct usb_hub));
-            hub_structs[nexthub].inuse = TRUE;
+            memset(&hub_structs[nexthub], 0, sizeof(struct usb_hub));
+            hub_structs[nexthub].inuse = true;
             return nexthub;
         }
     }
-    return SYSERR;
+    return ERR_GENERIC;
 }
 
 /* Marks a hub structure as free.  */
 static void hub_free(int hubid)
 {
-    hub_structs[hubid].inuse = FALSE;
+    hub_structs[hubid].inuse = false;
 }
 
 /** Stack size of USB hub thread.  This shouldn't need to be very large, but the
@@ -172,7 +178,7 @@ static usb_status_t
 hub_read_descriptor(struct usb_hub *hub)
 {
     usb_status_t status;
-    usb_dev_debug(hub->device, "Reading hub descriptor.\n");
+    LTRACEF("Reading hub descriptor.\n");
     status = usb_get_descriptor(hub->device,
                                 USB_HUB_REQUEST_GET_DESCRIPTOR,
                                 USB_BMREQUESTTYPE_DIR_IN |
@@ -183,7 +189,7 @@ hub_read_descriptor(struct usb_hub *hub)
                                                   sizeof(hub->descriptor_varData));
     if (status != USB_STATUS_SUCCESS)
     {
-        usb_dev_error(hub->device, "Failed to read hub descriptor: %s\n",
+        LTRACEF("Failed to read hub descriptor: %s\n",
                       usb_status_string(status));
     }
     return status;
@@ -195,8 +201,7 @@ port_get_status(struct usb_port *port)
 {
     usb_status_t status;
 
-    usb_dev_debug(port->hub->device,
-                  "Retrieving status of port %u\n", port->number);
+    LTRACEF("Retrieving status of port %u\n", port->number);
     status = usb_control_msg(port->hub->device, NULL,
                              USB_HUB_REQUEST_GET_STATUS,
                              USB_BMREQUESTTYPE_DIR_IN |
@@ -204,10 +209,10 @@ port_get_status(struct usb_port *port)
                                  USB_BMREQUESTTYPE_RECIPIENT_OTHER,
                              0, port->number,
                              &port->status, sizeof(port->status));
-    usb_dev_debug(port->hub->device, "Got port status\n");
+    LTRACEF("Got port status\n");
     if (status != USB_STATUS_SUCCESS)
     {
-        usb_dev_error(port->hub->device,
+        LTRACEF(
                       "Failed to get status for port %u: %s\n",
                       port->number, usb_status_string(status));
     }
@@ -224,7 +229,7 @@ port_get_status(struct usb_port *port)
  * @param feature
  *      The feature to enable or disable.
  * @param enable
- *      TRUE to enable the feature; FALSE to disable the feature.
+ *      true to enable the feature; false to disable the feature.
  *
  * @return
  *      See usb_control_msg().
@@ -246,13 +251,13 @@ port_change_feature(struct usb_port *port, enum usb_port_feature feature,
 static usb_status_t
 port_set_feature(struct usb_port *port, enum usb_port_feature feature)
 {
-    return port_change_feature(port, feature, TRUE);
+    return port_change_feature(port, feature, true);
 }
 
 static usb_status_t
 port_clear_feature(struct usb_port *port, enum usb_port_feature feature)
 {
-    return port_change_feature(port, feature, FALSE);
+    return port_change_feature(port, feature, false);
 }
 
 /** Maximum milliseconds to wait for a port to reset (800 is the same value that
@@ -281,7 +286,7 @@ port_reset(struct usb_port *port)
     usb_status_t status;
     uint i;
 
-    usb_dev_debug(port->hub->device, "Resetting port %u\n", port->number);
+    LTRACEF("Resetting port %u\n", port->number);
 
     /* Tell the hardware to reset.  */
     status = port_set_feature(port, USB_PORT_RESET);
@@ -296,7 +301,7 @@ port_reset(struct usb_port *port)
     for (i = 0; i < USB_PORT_RESET_TIMEOUT && port->status.reset;
          i += USB_PORT_RESET_DELAY)
     {
-        sleep(USB_PORT_RESET_DELAY);
+        // thread_sleep(USB_PORT_RESET_DELAY);
         status = port_get_status(port);
         if (status != USB_STATUS_SUCCESS)
         {
@@ -319,7 +324,8 @@ port_reset(struct usb_port *port)
      * Apparently, some devices are even slower than this, so we provide even
      * more recovery time than this.
      */
-    sleep(30);
+    // thread_sleep(30);
+    thread_sleep(1);
 
     return USB_STATUS_SUCCESS;
 }
@@ -336,7 +342,7 @@ port_attach_device(struct usb_port *port)
     status = port_reset(port);
     if (status != USB_STATUS_SUCCESS)
     {
-        usb_dev_error(port->hub->device, "Failed to reset port %u: %s\n",
+        LTRACEF("Failed to reset port %u: %s\n",
                       port->number, usb_status_string(status));
         return;
     }
@@ -344,7 +350,7 @@ port_attach_device(struct usb_port *port)
     new_device = usb_alloc_device(port->hub->device);
     if (new_device == NULL)
     {
-        usb_error("Too many USB devices attached\n");
+        LTRACEF("Too many USB devices attached\n");
         status = USB_STATUS_OUT_OF_MEMORY;
         port_clear_feature(port, USB_PORT_ENABLE);
         return;
@@ -373,17 +379,15 @@ port_attach_device(struct usb_port *port)
         new_device->speed = USB_SPEED_FULL;
     }
 
-    usb_dev_info(port->hub->device,
-                 "New %s-speed device connected to port %u\n",
+    LTRACEF("New %s-speed device connected to port %u\n",
                  usb_speed_to_string(new_device->speed), port->number);
     new_device->port_number = port->number;
 
     status = usb_attach_device(new_device);
     if (status != USB_STATUS_SUCCESS)
     {
-        usb_dev_error(port->hub->device,
-                      "Failed to attach new device to port %u: %s\n",
-                      port->number, usb_status_string(status));
+        LTRACEF("Failed to attach new device to port %u: %s\n",
+                port->number, usb_status_string(status));
         usb_free_device(new_device);
         port_clear_feature(port, USB_PORT_ENABLE);
         return;
@@ -401,7 +405,7 @@ port_detach_device(struct usb_port *port)
     if (port->child != NULL)
     {
         usb_lock_bus();
-        usb_dev_debug(port->hub->device, "Port %u: device detached.\n",
+        LTRACEF("Port %u: device detached.\n",
                       port->number);
         usb_info("Detaching %s\n", usb_device_description(port->child));
         usb_free_device(port->child);
@@ -414,6 +418,7 @@ port_detach_device(struct usb_port *port)
 static void
 port_status_changed(struct usb_port *port)
 {
+    LTRACEF("port_status_changed\n");
     usb_status_t status;
 
     /* Retrieve the port status by sending a USB control message.  (This is
@@ -425,8 +430,7 @@ port_status_changed(struct usb_port *port)
         return;
     }
 
-    usb_dev_debug(port->hub->device,
-                  "Port %u: {wPortStatus=0x%04x, wPortChange=0x%04x}\n",
+    LTRACEF("Port %u: {wPortStatus=0x%04x, wPortChange=0x%04x}\n",
                   port->number,
                   port->status.wPortStatus,
                   port->status.wPortChange);
@@ -437,7 +441,7 @@ port_status_changed(struct usb_port *port)
     {
         /* Connection changed: a device was connected or disconnected.  */
 
-        usb_dev_debug(port->hub->device, "Port %u: device now %s\n",
+        LTRACEF("Port %u: device now %s\n",
                       port->number,
                       (port->status.connected ? "connected" : "disconnected"));
 
@@ -523,20 +527,21 @@ void usb_hub_for_device_in_tree(struct usb_device *dev,
  * @return
  *      This thread does not return.
  */
-static thread
-hub_thread(void)
+static int hub_thread(void)
 {
     for (;;)
     {
         /* Wait for one or more hub status change messages to arrive, then
          * process them.  */
-        wait(hub_status_change_sema);
+        LTRACEF("Sem Wait for hub_status_change_sema\n");
+        sem_wait(&hub_status_change_sema);
+        LTRACEF("Processing USB Hub Status Change. Pending = 0x%x\n", hub_status_change_pending);
         while (hub_status_change_pending != 0)
         {
             struct usb_xfer_request *req;
             struct usb_hub *hub;
             int hub_id;
-            irqmask im;
+            // irqmask im;
 
             hub_id = 31 - __builtin_clz(hub_status_change_pending);
             req = &hub_status_change_requests[hub_id];
@@ -545,16 +550,16 @@ hub_thread(void)
             /* Clear the status change pending bit for this hub, but temporarily
              * disable interrupts to avoid a race with hub_status_changed()
              * modifying the same bitmask for a *different* hub.  */
-            im = disable();
+            arch_disable_ints(); // im = disable();
             hub_status_change_pending &= ~(1 << hub_id);
-            restore(im);
+            arch_enable_ints(); // restore(im);
 
             if (req->status == USB_STATUS_SUCCESS)
             {
                 uint32_t portmask;
                 uint i;
 
-                usb_dev_debug(req->dev, "Processing hub status change\n");
+                LTRACEF("Processing hub status change\n");
 
                 /* The format of the message is a bitmap that indicates which ports have
                  * had status changes.  We ignore bit 0, which indicates status change
@@ -576,16 +581,16 @@ hub_thread(void)
             }
             else
             {
-                usb_dev_error(req->dev, "Status change request failed: %s\n",
+                LTRACEF("Status change request failed: %s\n",
                               usb_status_string(req->status));
             }
 
             /* Re-submit the status change request.  */
-            usb_dev_debug(req->dev, "Re-submitting status change request\n");
+            LTRACEF("Re-submitting status change request\n");
             usb_submit_xfer_request(req);
         }
     }
-    return SYSERR;
+    return -1;
 }
 
 /**
@@ -603,11 +608,13 @@ hub_thread(void)
 static void
 hub_status_changed(struct usb_xfer_request *req)
 {
+    LTRACEF("[USBHUB] Status Changed.\n");
+
     int hub_id;
 
     hub_id = req - hub_status_change_requests;
     hub_status_change_pending |= 1 << hub_id;
-    signal(hub_status_change_sema);
+    sem_post(&hub_status_change_sema, true);
 }
 
 /**
@@ -618,18 +625,14 @@ hub_onetime_init(void)
 {
     uint i;
 
-    if (BADTID != hub_thread_tid)
+    if (NULL != hub_thread_tid)
     {
         /* Already initialized.  */
         return USB_STATUS_SUCCESS;
     }
 
     /* Create semaphore for signaling hub thread.  */
-    hub_status_change_sema = semcreate(0);
-    if (SYSERR == hub_status_change_sema)
-    {
-        return USB_STATUS_OUT_OF_MEMORY;
-    }
+    sem_init(&hub_status_change_sema, 0);
 
     /* Initialize available status change requests and hub structures.  */
     hub_status_change_pending = 0;
@@ -639,19 +642,21 @@ hub_onetime_init(void)
         hub_status_change_requests[i].recvbuf = hub_status_change_data[i];
         hub_status_change_requests[i].size = sizeof(hub_status_change_data[i]);
         hub_status_change_requests[i].completion_cb_func = hub_status_changed;
-        hub_structs[i].inuse = FALSE;
+        hub_structs[i].inuse = false;
     }
 
     /* Create hub thread.  */
-    hub_thread_tid = create(hub_thread, HUB_THREAD_STACK_SIZE, HUB_THREAD_PRIORITY,
-                            HUB_THREAD_NAME, 0);
-    if (SYSERR == ready(hub_thread_tid, RESCHED_NO))
+    hub_thread_tid = thread_create(HUB_THREAD_NAME, &hub_thread, NULL, 
+                                   HIGH_PRIORITY, HUB_THREAD_STACK_SIZE);
+    if (hub_thread_tid == NULL)
     {
-        kill(hub_thread_tid);
-        hub_thread_tid = BADTID;
-        semfree(hub_status_change_sema);
+        // kill(hub_thread_tid);
+        // hub_thread_tid = NU;
+        sem_destroy(&hub_status_change_sema);
         return USB_STATUS_OUT_OF_MEMORY;
     }
+
+    thread_resume(hub_thread_tid);
     return USB_STATUS_SUCCESS;
 }
 
@@ -666,7 +671,7 @@ hub_init_ports(struct usb_hub *hub)
 
     if (hub->descriptor.bNbrPorts > HUB_MAX_PORTS)
     {
-        usb_dev_error(hub->device,
+        LTRACEF(
                       "Too many ports on hub (%u > HUB_MAX_PORTS=%u)\n",
                       hub->descriptor.bNbrPorts, HUB_MAX_PORTS);
         return USB_STATUS_DEVICE_UNSUPPORTED;
@@ -690,7 +695,7 @@ hub_power_on_ports(struct usb_hub *hub)
     uint i;
     usb_status_t status;
 
-    usb_dev_debug(hub->device, "Powering on %u USB ports\n",
+    LTRACEF("Powering on %u USB ports\n",
                   hub->descriptor.bNbrPorts);
 
     for (i = 0; i < hub->descriptor.bNbrPorts; i++)
@@ -698,7 +703,7 @@ hub_power_on_ports(struct usb_hub *hub)
         status = port_set_feature(&hub->ports[i], USB_PORT_POWER);
         if (status != USB_STATUS_SUCCESS)
         {
-            usb_dev_error(hub->device,
+            LTRACEF(
                           "Failed to power on port %u: %s\n", i,
                           usb_status_string(status));
             return status;
@@ -709,7 +714,7 @@ hub_power_on_ports(struct usb_hub *hub)
      * bPwrOn2PwrGood of the hub descriptor is the "Time (in 2 ms intervals)
      * from the time the power-on sequence begins on a port until power is good
      * on that port."  Here we insert this required delay.  */
-    sleep(2 * hub->descriptor.bPwrOn2PwrGood);
+    // thread_sleep(2 * hub->descriptor.bPwrOn2PwrGood);
 
     return USB_STATUS_SUCCESS;
 }
@@ -735,6 +740,7 @@ hub_bind_device(struct usb_device *dev)
         (dev->endpoints[0][0]->bmAttributes & 0x3) !=
                 USB_TRANSFER_TYPE_INTERRUPT)
     {
+        LTRACEF("[USBHUB]Bind failed for non-hub device.\n");
         return USB_STATUS_DEVICE_UNSUPPORTED;
     }
 
@@ -742,14 +748,15 @@ hub_bind_device(struct usb_device *dev)
     status = hub_onetime_init();
     if (status != USB_STATUS_SUCCESS)
     {
+        LTRACEF("[USBHUB]Bind failed for non-hub device.\n");
         return status;
     }
 
     /* Allocate per-hub data.  */
     hub_id = hub_alloc();
-    if (SYSERR == hub_id)
+    if (hub_id < 0)
     {
-        usb_error("Too many hubs attached.\n");
+        LTRACEF("[USBHUB]Too many hubs attached.\n");
         return USB_STATUS_DEVICE_UNSUPPORTED;
     }
 
@@ -760,11 +767,12 @@ hub_bind_device(struct usb_device *dev)
     status = hub_read_descriptor(hub);
     if (status != USB_STATUS_SUCCESS)
     {
+        LTRACEF("[USBHUB]Failed to read hub descriptor.");
         hub_free(hub_id);
         return status;
     }
 
-    usb_dev_debug(dev, "Attaching %sUSB hub with %u ports\n",
+    LTRACEF("[USBHUB]Attaching %sUSB hub with %u ports\n",
                   (hub->descriptor.wHubCharacteristics &
                    USB_HUB_CHARACTERISTIC_IS_COMPOUND_DEVICE) ?
                             "compound device " : "",
@@ -811,7 +819,7 @@ hub_unbind_device(struct usb_device *hub_device)
 {
     int hub_id = (int)hub_device->driver_private;
     struct usb_hub *hub = &hub_structs[hub_id];
-    irqmask im;
+    // irqmask im;
     uint i;
 
     /* Detach any devices attached to this hub (a.k.a. "child" devices).  */
@@ -829,9 +837,9 @@ hub_unbind_device(struct usb_device *hub_device)
      * Interrupts must be temporarily disabled to avoid racing with
      * hub_status_changed() trying to set bit for a *different* hub in the same
      * bitmask.  */
-    im = disable();
+    arch_disable_ints(); // im = disable();
     hub_status_change_pending &= ~(1 << hub_id);
-    restore(im);
+    arch_enable_ints(); // restore(im);
 
     /* Free the `struct usb_hub' for the detached hub.  */
     hub_free(hub_id);

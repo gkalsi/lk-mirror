@@ -9,13 +9,14 @@
 #ifndef _USB_HUB_DEFS_H_
 #define _USB_HUB_DEFS_H_
 
-#include <usb_util.h>
+#include <compiler.h>
+#include <platform/usbcore/usb_util.h>
 
 #define USB_HUB_CHARACTERISTIC_IS_COMPOUND_DEVICE (1 << 2)
 
 /** Standard format of USB hub descriptors.  See Table 11-13 in Section 11.23 of
  * the USB 2.0 specification.  */
-struct usb_hub_descriptor {
+struct __PACKED usb_hub_descriptor {
     uint8_t  bDescLength;
     uint8_t  bDescriptorType;
     uint8_t  bNbrPorts;
@@ -24,11 +25,11 @@ struct usb_hub_descriptor {
     uint8_t  bHubContrCurrent;
     uint8_t  varData[]; /* Variable length field; 64 should be the maximum possible
                       length (255 ports => 2 x 32 bytes of data) */
-} __packed;
+};
 
 /** USB port status, defined in Section 11.24.2.7 of the USB 2.0 specification.
  * */
-struct usb_port_status {
+struct __PACKED usb_port_status {
     union {
         uint16_t wPortStatus;
         struct {
@@ -57,7 +58,7 @@ struct usb_port_status {
             uint16_t wPortChange_reserved : 11;
         };
     };
-} __packed;
+};
 
 /** USB port features.  see Table 11-17 in Section 11.24.2 of the USB 2.0
  * specification.  */
@@ -80,7 +81,7 @@ enum usb_port_feature {
 
 /** USB hub status, defined in Section 11.24.2.6 of the USB 2.0 specification.
  * */
-struct usb_hub_status {
+struct __PACKED usb_hub_status {
     union {
         uint16_t wHubStatus;
         struct {
@@ -97,7 +98,7 @@ struct usb_hub_status {
             uint16_t wHubChange_reserved : 14;
         };
     };
-} __packed;
+};
 
 /** Standard USB hub requests.  See Table 11-16 in Section 11.24.2 of the USB
  * 2.0 specification.  */

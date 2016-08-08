@@ -48,7 +48,7 @@
  *    because USB is useless without hubs.
  *
  * To initialize this core USB driver, usbinit() must be called by the system
- * startup code.  See that function for details.
+ * startup code.  See that function f`or details.
  *
  * The other functions exported by this core USB driver are mostly intended to
  * be used by USB device drivers.
@@ -60,12 +60,16 @@
 
 // #include <memory.h>
 #include <stdlib.h>
-// #include <semaphore.h>
+#include <string.h>
+#include <trace.h>
+#include <kernel/semaphore.h>
 #include <platform/usbcore/usb_core_driver.h>
 #include <platform/usbcore/usb_hcdi.h>
 #include <platform/usbcore/usb_hub_driver.h>
 #include <platform/usbcore/usb_std_defs.h>
 #include <platform/usbcore/usb_subsystem.h>
+
+#define LOCAL_TRACE 0
 
 /** Maximum number of simultaneous USB devices supported.  */
 #define MAX_NUSBDEV 32
@@ -103,8 +107,11 @@ usb_init_xfer_request(struct usb_xfer_request *req)
     memset(req, 0, sizeof(*req));
 
     /* TODO: HCD-specific variables need to be handled better.  */
-    req->deferer_thread_tid = BADTID;
-    req->deferer_thread_sema = SYSERR;
+    req->deferer_sema_ready = false;
+    req->deferer_thread_tid = NULL;
+    event_init(&req->evt, false, EVENT_FLAG_AUTOUNSIGNAL);
+    // req->deferer_thread_tid = BADTID;
+    // req->deferer_thread_sema = SYSERR;
 }
 
 
@@ -125,8 +132,8 @@ usb_alloc_xfer_request(uint bufsize)
 {
     struct usb_xfer_request *req;
 
-    req = memget(sizeof(struct usb_xfer_request) + bufsize);
-    if (req == (void*)SYSERR)
+    req = malloc(sizeof(struct usb_xfer_request) + bufsize);
+    if (req == NULL)
     {
         return NULL;
     }
@@ -150,9 +157,9 @@ void usb_free_xfer_request(struct usb_xfer_request *req)
     if (req != NULL)
     {
         /* TODO: HCD-specific variables need to be handled better.  */
-        kill(req->deferer_thread_tid);
-        semfree(req->deferer_thread_sema);
-        memfree(req, sizeof(struct usb_xfer_request) + req->size);
+        // kill(req->deferer_thread_tid);
+        // sem_destroy(&req->deferer_thread_sema);
+        free(req);
     }
 }
 
@@ -198,33 +205,35 @@ void usb_free_xfer_request(struct usb_xfer_request *req)
 usb_status_t
 usb_submit_xfer_request(struct usb_xfer_request *req)
 {
-#if USB_MIN_LOG_PRIORITY <= USB_LOG_PRIORITY_DEBUG
+// #if USB_MIN_LOG_PRIORITY <= USB_LOG_PRIORITY_DEBUG
+#if 1
     enum usb_transfer_type type;
     enum usb_direction dir;
 #endif
-    irqmask im;
+    // irqmask im;
     usb_status_t status;
 
     if (!req || !req->dev || !req->completion_cb_func ||
         !req->dev->inuse)
     {
-        usb_error("Bad usb_xfer_request: no device or completion callback "
+        LTRACEF("Bad usb_xfer_request: no device or completion callback "
                   "function\n");
         return USB_STATUS_INVALID_PARAMETER;
     }
 
-    im = disable();
+    arch_disable_ints(); // im = disable();
 
     /* Don't allow submitting new transfers to devices that are going away.  */
     if (req->dev->state == USB_DEVICE_DETACHMENT_PENDING)
     {
-        usb_dev_debug(req->dev, "Device detachment pending; "
+        LTRACEF("Device detachment pending; "
                       "refusing new xfer\n");
-        restore(im);
+        arch_enable_ints(); // restore(im);
         return USB_STATUS_DEVICE_DETACHED;
     }
 
-#if USB_MIN_LOG_PRIORITY <= USB_LOG_PRIORITY_DEBUG
+// #if USB_MIN_LOG_PRIORITY <= USB_LOG_PRIORITY_DEBUG
+#if 1
     if (req->endpoint_desc)
     {
         type = req->endpoint_desc->bmAttributes & 0x3;
@@ -235,14 +244,14 @@ usb_submit_xfer_request(struct usb_xfer_request *req)
         type = USB_TRANSFER_TYPE_CONTROL;
         dir = req->setup_data.bmRequestType >> 7;
     }
-    usb_dev_debug(req->dev, "Submitting xfer request (%u bytes, "
+    LTRACEF("Submitting xfer request (%u bytes, "
                   "type=%s, dir=%s)\n",
                   req->size,
                   usb_transfer_type_to_string(type),
                   usb_direction_to_string(dir));
     if (type == USB_TRANSFER_TYPE_CONTROL)
     {
-        usb_dev_debug(req->dev, "Control message: {.bmRequestType=0x%02x, "
+        LTRACEF("Control message: {.bmRequestType=0x%02x, "
                       ".bRequest=0x%02x, wValue=0x%04x, wIndex=0x%04x, wLength=0x%04x}\n",
                       req->setup_data.bmRequestType,
                       req->setup_data.bRequest,
@@ -261,7 +270,7 @@ usb_submit_xfer_request(struct usb_xfer_request *req)
     {
         --req->dev->xfer_pending_count;
     }
-    restore(im);
+    arch_enable_ints(); // restore(im);
     return status;
 }
 
@@ -278,9 +287,9 @@ usb_submit_xfer_request(struct usb_xfer_request *req)
 void
 usb_complete_xfer(struct usb_xfer_request *req)
 {
-    irqmask im;
+    // irqmask im;
 
-    im = disable();
+    arch_disable_ints(); // im = disable();
 
     --req->dev->xfer_pending_count;
 
@@ -290,8 +299,7 @@ usb_complete_xfer(struct usb_xfer_request *req)
         req->status = USB_STATUS_DEVICE_DETACHED;
     }
 
-    usb_dev_debug(req->dev,
-                  "Calling completion callback (Actual transfer size %u "
+    LTRACEF("Calling completion callback (Actual transfer size %u "
                   "of %u bytes, type=%s, dir=%s, status=%d)\n",
                   req->actual_size, req->size,
                   usb_transfer_type_to_string(
@@ -311,24 +319,32 @@ usb_complete_xfer(struct usb_xfer_request *req)
         req->dev->last_error = req->status;
     }
 
+    LTRACEF("[USB] Calling Completion Callback\n");
+
     /* Actually call the completion function.  */
     (*req->completion_cb_func)(req);
+
+    LTRACEF("[USB] USB Completion Callback Returned.\n");
 
     /* If device is being detached and we just completed the last pending
      * transfer to it, signal the thread waiting in usb_free_device().  */
     if (req->dev->state == USB_DEVICE_DETACHMENT_PENDING &&
         req->dev->xfer_pending_count == 0)
     {
-        send(req->dev->quiescent_state_waiter, 0);
+        // send(req->dev->quiescent_state_waiter, 0);
     }
 
-    restore(im);
+    LTRACEF("[USB] usb_complete_xfer completed.\n");
+
+    arch_enable_ints(); // restore(im);
 }
 
 static void
 signal_control_msg_done(struct usb_xfer_request *req)
 {
-    signal((semaphore)req->private);
+    LTRACEF("[USB] Signal Control Message Done\n");
+    sem_post((semaphore_t *)req->private, true);
+    LTRACEF("[USB] Signalled Control Message Done\n");
 }
 
 /**
@@ -399,19 +415,23 @@ usb_control_msg(struct usb_device *dev,
 {
     usb_status_t status;
     struct usb_xfer_request *req;
-    semaphore sem;
+    semaphore_t sem;
 
-    sem = semcreate(0);
-    if (isbadsem(sem))
-    {
-        return USB_STATUS_OUT_OF_MEMORY;
-    }
+    // sem = semcreate(0);
+    sem_init(&sem, 0);
+    // if (isbadsem(sem))
+    // {
+    //     return USB_STATUS_OUT_OF_MEMORY;
+    // }
     req = usb_alloc_xfer_request(wLength);
     if (req == NULL)
     {
-        semfree(sem);
+        // semfree(sem);
         return USB_STATUS_OUT_OF_MEMORY;
     }
+
+    LTRACEF("[USB] Submitting Xfer Request = 0x%p\n", req);
+
     req->dev = dev;
     req->endpoint_desc = endpoint_desc;
     req->recvbuf = data;
@@ -422,12 +442,14 @@ usb_control_msg(struct usb_device *dev,
     req->setup_data.wIndex = wIndex;
     req->setup_data.wLength = wLength;
     req->completion_cb_func = signal_control_msg_done;
-    req->private = (void*)sem;
+    req->private = (void*)&sem;
     status = usb_submit_xfer_request(req);
     if (status == USB_STATUS_SUCCESS)
     {
         /* Wait for transfer to complete (or fail).  */
-        wait(sem);
+        LTRACEF("[USBCORE] Waiting for sem in usb_control_msg\n");
+        sem_wait(&sem);
+        LTRACEF("[USBCORE] Sem wait success\n");
         status = req->status;
 
         /* Force error if actual size was not the same as requested size.  */
@@ -438,8 +460,15 @@ usb_control_msg(struct usb_device *dev,
             req->dev->last_error = status;
         }
     }
+    
+    LTRACEF("[USBCORE] usb_free_xfer_request\n");
     usb_free_xfer_request(req);
-    semfree(sem);
+    
+    LTRACEF("[USBCORE] sem_destroy\n");
+    sem_destroy(&sem);
+
+    LTRACEF("[USBCORE] Return from usb_control_msg\n");
+
     return status;
 }
 
@@ -491,13 +520,13 @@ usb_get_descriptor(struct usb_device *dev, uint8_t bRequest, uint8_t bmRequestTy
 
         if (hdr.bLength < sizeof(hdr))
         {
-            usb_dev_error(dev, "Descriptor length too short\n");
+            printf( "Descriptor length too short\n");
             return USB_STATUS_INVALID_DATA;
         }
 
         /* Length to read is the minimum of the descriptor's actual length and
          * the buffer length.  */
-        len = min(hdr.bLength, buflen);
+        len = MIN(hdr.bLength, buflen);
     }
     else
     {
@@ -513,6 +542,7 @@ usb_get_descriptor(struct usb_device *dev, uint8_t bRequest, uint8_t bmRequestTy
 static usb_status_t
 usb_read_device_descriptor(struct usb_device *dev, uint16_t maxlen)
 {
+    LTRACEF("[USB] Reading Device Descriptor for device = %p\n", dev);
     /* Note: we do not really need to use usb_get_descriptor() here because we
      * never read more than the minimum length of the device descriptor.  */
     return usb_control_msg(dev, NULL,
@@ -575,8 +605,8 @@ usb_read_configuration_descriptor(struct usb_device *dev, uint8_t configuration)
     }
 
     /* Allocate buffer for full configuration descriptor */
-    dev->config_descriptor = memget(desc.wTotalLength);
-    if (dev->config_descriptor == (void*)SYSERR)
+    dev->config_descriptor = malloc(desc.wTotalLength);
+    if (dev->config_descriptor == NULL)
     {
         return USB_STATUS_OUT_OF_MEMORY;
     }
@@ -594,7 +624,7 @@ usb_read_configuration_descriptor(struct usb_device *dev, uint8_t configuration)
      * */
     interface_idx = -1;
     endpoint_idx = -1;
-    in_alternate_setting = FALSE;
+    in_alternate_setting = false;
     for (i = 0;
          i + sizeof(struct usb_descriptor_header) <= desc.wTotalLength;
          i += hdr->bLength)
@@ -617,19 +647,19 @@ usb_read_configuration_descriptor(struct usb_device *dev, uint8_t configuration)
                     endpoint_idx + 1 !=
                             dev->interfaces[interface_idx]->bNumEndpoints)
                 {
-                    usb_dev_debug(dev, "Number of endpoints incorrect\n");
+                    LTRACEF("Number of endpoints incorrect\n");
                     goto out_invalid;
                 }
                 if (((struct usb_interface_descriptor*)hdr)->bAlternateSetting != 0)
                 {
-                    in_alternate_setting = TRUE;
+                    in_alternate_setting = true;
                 }
                 else
                 {
-                    in_alternate_setting = FALSE;
+                    in_alternate_setting = false;
                     if (++interface_idx >= USB_DEVICE_MAX_INTERFACES)
                     {
-                        usb_dev_error(dev,
+                        printf(
                                       "Too many interfaces (this driver only "
                                       "supports %u per configuration)\n",
                                       USB_DEVICE_MAX_INTERFACES);
@@ -653,7 +683,7 @@ usb_read_configuration_descriptor(struct usb_device *dev, uint8_t configuration)
                 {
                     if (++endpoint_idx >= USB_DEVICE_MAX_ENDPOINTS)
                     {
-                        usb_dev_error(dev,
+                        printf(
                                       "Too many endpoints (this driver only "
                                       "supports %u per interface)\n",
                                       USB_DEVICE_MAX_ENDPOINTS);
@@ -669,14 +699,14 @@ usb_read_configuration_descriptor(struct usb_device *dev, uint8_t configuration)
     }
     if (interface_idx + 1 != dev->config_descriptor->bNumInterfaces)
     {
-        usb_dev_debug(dev, "Number of interfaces incorrect (interface_idx=%d)\n",
+        LTRACEF("Number of interfaces incorrect (interface_idx=%d)\n",
                       interface_idx);
         goto out_invalid;
     }
 
     return USB_STATUS_SUCCESS;
 out_invalid:
-    usb_dev_error(dev, "Configuration descriptor invalid\n");
+    printf( "Configuration descriptor invalid\n");
     return USB_STATUS_INVALID_DATA;
 }
 
@@ -741,17 +771,17 @@ usb_alloc_device(struct usb_device *parent)
 {
     uint i;
     struct usb_device *dev;
-    irqmask im;
+    // irqmask im;
 
     dev = NULL;
-    im = disable();
+    arch_disable_ints(); // im = disable();
     for (i = 0; i < MAX_NUSBDEV; i++)
     {
         if (!usb_devices[i].inuse)
         {
             dev = &usb_devices[i];
             bzero(dev, sizeof(struct usb_device));
-            dev->inuse = TRUE;
+            dev->inuse = true;
             dev->speed = USB_SPEED_HIGH; /* Default to high-speed unless
                                             overridden later */
             dev->parent = parent;
@@ -761,11 +791,11 @@ usb_alloc_device(struct usb_device *parent)
             }
             dev->last_error = USB_STATUS_SUCCESS;
             dev->state = USB_DEVICE_ATTACHED;
-            dev->quiescent_state_waiter = BADTID;
+            // dev->quiescent_state_waiter = BADTID;
             break;
         }
     }
-    restore(im);
+    arch_enable_ints(); // restore(im);
     return dev;
 }
 
@@ -782,35 +812,35 @@ usb_alloc_device(struct usb_device *parent)
 void
 usb_free_device(struct usb_device *dev)
 {
-    irqmask im;
+    // irqmask im;
 
     /* Disallow new transfers to this device and wait for all pending
      * transfers to complete.  */
-    im = disable();
+    arch_disable_ints(); // im = disable();
     dev->state = USB_DEVICE_DETACHMENT_PENDING;
     if (dev->xfer_pending_count != 0)
     {
-        usb_dev_debug(dev, "Waiting for %u pending xfers to complete\n",
+        LTRACEF("Waiting for %u pending xfers to complete\n",
                       dev->xfer_pending_count);
-        dev->quiescent_state_waiter = gettid();
-        receive();
+        // dev->quiescent_state_waiter = gettid();
+        // receive();
     }
-    restore(im);
+    arch_enable_ints(); // restore(im);
 
     /* Unbind the device driver if needed.  */
     if (dev->driver != NULL && dev->driver->unbind_device != NULL)
     {
-        usb_dev_debug(dev, "Unbinding %s\n", dev->driver->name);
+        LTRACEF("Unbinding %s\n", dev->driver->name);
         dev->driver->unbind_device(dev);
     }
 
     /* Free configuration descriptor and device structure.  */
-    usb_dev_debug(dev, "Releasing USB device structure.\n");
+    LTRACEF("Releasing USB device structure.\n");
     if (dev->config_descriptor != NULL)
     {
-        memfree(dev->config_descriptor, dev->config_descriptor->wTotalLength);
+        free(dev->config_descriptor);
     }
-    dev->inuse = FALSE;
+    dev->inuse = false;
 }
 
 /**
@@ -840,7 +870,7 @@ usb_try_to_bind_device_driver(struct usb_device *dev)
     status = USB_STATUS_DEVICE_UNSUPPORTED;
     for (i = 0; i < usb_num_device_drivers; i++)
     {
-        usb_dev_debug(dev, "Attempting to bind %s to device\n",
+        LTRACEF("Attempting to bind %s to device\n",
                       usb_device_drivers[i]->name);
         status = usb_device_drivers[i]->bind_device(dev);
         if (status != USB_STATUS_DEVICE_UNSUPPORTED)
@@ -887,37 +917,37 @@ usb_attach_device(struct usb_device *dev)
      * will include the maximum packet size that should be used with further
      * transfers.  This works because the maximum packet size is guaranteed to
      * be at least 8 bytes.  */
-    usb_dev_debug(dev, "Getting maximum packet size from start of "
+    LTRACEF("Getting maximum packet size from start of "
                   "device descriptor\n");
     dev->descriptor.bMaxPacketSize0 = 8;
     status = usb_read_device_descriptor(dev, 8);
     if (status != USB_STATUS_SUCCESS)
     {
-        usb_dev_error(dev, "Failed to read start of device descriptor: %s\n",
+        printf( "Failed to read start of device descriptor: %s\n",
                       usb_status_string(status));
         return status;
     }
 
-    usb_dev_debug(dev, "Using bMaxPacketSize0=%u\n", dev->descriptor.bMaxPacketSize0);
+    LTRACEF("Using bMaxPacketSize0=%u\n", dev->descriptor.bMaxPacketSize0);
 
     /* Assign an address to this device.  To get a unique address we just use
      * the 1-based index of the `struct usb_device' in the usb_devices table. */
     address = (dev - usb_devices) + 1;
-    usb_dev_debug(dev, "Assigning address %u to new device\n", address);
+    LTRACEF("Assigning address %u to new device\n", address);
     status = usb_set_address(dev, address);
     if (status != USB_STATUS_SUCCESS)
     {
-        usb_dev_error(dev, "Failed to assign address: %s\n",
+        printf( "Failed to assign address: %s\n",
                       usb_status_string(status));
         return status;
     }
 
     /* Read the device descriptor to find information about this device.  */
-    usb_debug("Reading device descriptor.\n");
+    LTRACEF("Reading device descriptor.\n");
     status = usb_read_device_descriptor(dev, sizeof(dev->descriptor));
     if (status != USB_STATUS_SUCCESS)
     {
-        usb_dev_error(dev, "Failed to read device descriptor: %s\n",
+        printf( "Failed to read device descriptor: %s\n",
                       usb_status_string(status));
         return status;
     }
@@ -926,37 +956,37 @@ usb_attach_device(struct usb_device *dev)
     /* Read product and manufacturer strings if present.  */
     if (dev->descriptor.iProduct != 0)
     {
-        usb_debug("Reading product string.\n");
+        LTRACEF("Reading product string.\n");
         usb_get_ascii_string(dev, dev->descriptor.iProduct,
                              dev->product, sizeof(dev->product));
     }
     if (dev->descriptor.iManufacturer != 0)
     {
-        usb_debug("Reading manufacturer string.\n");
+        LTRACEF("Reading manufacturer string.\n");
         usb_get_ascii_string(dev, dev->descriptor.iManufacturer,
                              dev->manufacturer, sizeof(dev->manufacturer));
     }
 #endif
 
     /* Read the first configuration descriptor.  */
-    usb_debug("Reading configuration descriptor.\n");
+    LTRACEF("Reading configuration descriptor.\n");
     status = usb_read_configuration_descriptor(dev, 0);
     if (status != USB_STATUS_SUCCESS)
     {
-        usb_dev_error(dev, "Failed to read configuration descriptor: %s\n",
+        printf( "Failed to read configuration descriptor: %s\n",
                       usb_status_string(status));
         return status;
     }
 
     /* Configure the device with its first reported configuration.  */
-    usb_dev_debug(dev, "Assigning configuration %u (%u interfaces available)\n",
+    LTRACEF("Assigning configuration %u (%u interfaces available)\n",
                   dev->config_descriptor->bConfigurationValue,
                   dev->config_descriptor->bNumInterfaces);
     status = usb_set_configuration(dev,
                                    dev->config_descriptor->bConfigurationValue);
     if (status != USB_STATUS_SUCCESS)
     {
-        usb_dev_error(dev, "Failed to set device configuration: %s\n",
+        printf( "Failed to set device configuration: %s\n",
                       usb_status_string(status));
         return status;
     }
@@ -969,7 +999,7 @@ usb_attach_device(struct usb_device *dev)
 
     if (status == USB_STATUS_DEVICE_UNSUPPORTED)
     {
-        usb_dev_info(dev, "No driver found for device.\n");
+        LTRACEF("No driver found for device.\n");
         /* No currently registered driver supports the new device.  However,
          * this should not be considered a failure to attach the device, since
          * the needed driver may just not be registered yet.  */
@@ -977,13 +1007,13 @@ usb_attach_device(struct usb_device *dev)
     }
     else if (status != USB_STATUS_SUCCESS)
     {
-        usb_dev_error(dev, "Failed to bind driver to new USB device: %s\n",
+        LTRACEF("Failed to bind driver to new USB device: %s\n",
                       usb_status_string(status));
     }
     return status;
 }
 
-static semaphore usb_bus_lock;
+static semaphore_t usb_bus_lock;
 
 /**
  * @ingroup usbcore
@@ -993,7 +1023,7 @@ static semaphore usb_bus_lock;
  */
 void usb_lock_bus(void)
 {
-    wait(usb_bus_lock);
+    sem_wait(&usb_bus_lock);
 }
 
 /**
@@ -1004,7 +1034,7 @@ void usb_lock_bus(void)
  */
 void usb_unlock_bus(void)
 {
-    signal(usb_bus_lock);
+    sem_post(&usb_bus_lock, true);
 }
 
 /**
@@ -1026,32 +1056,32 @@ void usb_unlock_bus(void)
 usb_status_t
 usb_register_device_driver(const struct usb_device_driver *drv)
 {
-    irqmask im;
+    // irqmask im;
     usb_status_t status;
 
     if (NULL == drv->bind_device)
     {
-        usb_error("bind_device function must be implemented\n");
+        LTRACEF("bind_device function must be implemented\n");
         return USB_STATUS_INVALID_PARAMETER;
     }
 
-    im = disable();
+    arch_disable_ints(); // im = disable();
     if (usb_num_device_drivers >= MAX_NUSBDRV)
     {
-        usb_error("Can't register new USB device driver: "
+        LTRACEF("Can't register new USB device driver: "
                   "too many drivers already registered\n");
         status = USB_STATUS_UNSUPPORTED_REQUEST;
     }
     else
     {
-        bool already_registered = FALSE;
+        bool already_registered = false;
         uint i;
 
         for (i = 0; i < usb_num_device_drivers; i++)
         {
             if (drv == usb_device_drivers[i])
             {
-                already_registered = TRUE;
+                already_registered = true;
                 break;
             }
         }
@@ -1066,7 +1096,7 @@ usb_register_device_driver(const struct usb_device_driver *drv)
         }
         status = USB_STATUS_SUCCESS;
     }
-    restore(im);
+    arch_enable_ints(); // restore(im);
     return status;
 }
 
@@ -1092,11 +1122,12 @@ void usbinit(void)
     struct usb_device *root_hub;
     usb_status_t status;
 
-    usb_bus_lock = semcreate(0);
-    if (isbadsem(usb_bus_lock))
-    {
-        goto err;
-    }
+    sem_init(&usb_bus_lock, 0);
+    // usb_bus_lock = semcreate(0);
+    // if (isbadsem(usb_bus_lock))
+    // {
+    //     goto err;
+    // }
 
     status = usb_register_device_driver(&usb_hub_driver);
     if (status != USB_STATUS_SUCCESS)
@@ -1107,34 +1138,36 @@ void usbinit(void)
     status = hcd_start();
     if (status != USB_STATUS_SUCCESS)
     {
-        usb_error("Failed to start USB host controller: %s\n",
+        LTRACEF("Failed to start USB host controller: %s\n",
                   usb_status_string(status));
         goto err_free_usb_bus_lock;
     }
 
-    usb_debug("Successfully started USB host controller\n");
+    LTRACEF("Successfully started USB host controller\n");
 
     root_hub = usb_alloc_device(NULL);
 
-    usb_debug("Attaching root hub\n");
+    LTRACEF("Attaching root hub\n");
 
     status = usb_attach_device(root_hub);
     if (status != USB_STATUS_SUCCESS)
     {
-        usb_error("Failed to attach root hub: %s\n", usb_status_string(status));
+        LTRACEF("Failed to attach root hub: %s\n", usb_status_string(status));
         goto err_free_root_hub;
     }
 
     usb_root_hub = root_hub;
-    usb_debug("Successfully initialized USB subsystem\n");
+    LTRACEF("Successfully initialized USB subsystem\n");
     usb_unlock_bus();
-    return OK;
+    return;
+    // return OK;
 
 err_free_root_hub:
     usb_free_device(root_hub);
     hcd_stop();
 err_free_usb_bus_lock:
-    semfree(usb_bus_lock);
+    // semfree(usb_bus_lock);
 err:
-    return SYSERR;
+    // return SYSERR;
+    return;
 }

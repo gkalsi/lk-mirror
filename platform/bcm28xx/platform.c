@@ -34,6 +34,7 @@
 #include <platform.h>
 #include <platform/interrupts.h>
 #include <platform/bcm28xx.h>
+#include <platform/usbcore/usb_subsystem.h>
 
 #if BCM2836
 #include <arch/arm.h>
@@ -213,6 +214,8 @@ void platform_early_init(void)
 void platform_init(void)
 {
     uart_init();
+
+    usbinit();
 }
 
 void platform_dputc(char c)
