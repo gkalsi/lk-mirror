@@ -35,6 +35,8 @@
 #include <platform/interrupts.h>
 #include <platform/bcm28xx.h>
 
+#include <usbd/usbd.h>
+
 #if BCM2836
 #include <arch/arm.h>
 #include <arch/arm/mmu.h>
@@ -212,6 +214,9 @@ void platform_early_init(void)
 
 void platform_init(void)
 {
+    Result rs = UsbInitialise();
+    printf("USBD Initialize Returned 0x%x\n", rs);
+
     uart_init();
 }
 

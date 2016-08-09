@@ -2,7 +2,7 @@ LOCAL_DIR := $(GET_LOCAL_DIR)
 
 MODULE := $(LOCAL_DIR)
 
-WITH_SMP := 1
+WITH_SMP := 0
 #LK_HEAP_IMPLEMENTATION ?= dlmalloc
 
 MODULE_DEPS := \
@@ -62,6 +62,7 @@ MODULE_SRCS += \
 MODULE_DEPS += \
 		app/shell \
 	    app/tests \
+	    platform/bcm28xx/usbcore \
 	    lib/fdt
 
 WITH_CPP_SUPPORT=true
