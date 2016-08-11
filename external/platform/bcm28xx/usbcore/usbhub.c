@@ -64,7 +64,7 @@
 #include <platform/usbcore/usb_hub_driver.h>
 #include <platform/usbcore/usb_std_defs.h>
 
-#define LOCAL_TRACE 0
+#define LOCAL_TRACE 1
 
 /** Maximum number of ports per hub supported by this driver.  (USB 2.0
  * theoretically allows up to 255 ports per hub.)  */
@@ -339,6 +339,8 @@ port_attach_device(struct usb_port *port)
     usb_status_t status;
     struct usb_device *new_device;
 
+    arch_invalidate_cache_range(port, sizeof(*port));
+
     status = port_reset(port);
     if (status != USB_STATUS_SUCCESS)
     {
@@ -372,10 +374,12 @@ port_attach_device(struct usb_port *port)
     }
     else if (port->status.low_speed_attached)
     {
+        printf("Low speed device attached to hub\n");
         new_device->speed = USB_SPEED_LOW;
     }
     else
     {
+        printf("Full speed device attached to hub\n");
         new_device->speed = USB_SPEED_FULL;
     }
 
@@ -500,7 +504,7 @@ void usb_hub_for_device_in_tree(struct usb_device *dev,
         (*callback)(dev);
         if (is_hub(dev))
         {
-            int hub_id = (int)dev->driver_private;
+            uintptr_t hub_id = (uintptr_t)dev->driver_private;
             struct usb_hub *hub = &hub_structs[hub_id];
             uint i;
 

@@ -88,7 +88,7 @@
 #include <platform/bcm28xx.h>
 #include <platform/interrupts.h>
 
-#define LOCAL_TRACE 0
+#define LOCAL_TRACE 1
 
 #define DIV_ROUND_UP(num, denom) (((num) + (denom) - 1) / (denom))
 
@@ -258,7 +258,7 @@ dwc_soft_reset(void)
     uint32_t core_reset_reg;
     do {
         core_reset_reg = readl(&regs->core_reset);
-    } while (core_reset_reg & DWC_AHB_MASTER_IDLE == false);
+    } while ((core_reset_reg & DWC_AHB_MASTER_IDLE) == false);
 
     /* Set soft reset flag, then wait until it's cleared.  */
     // regs->core_reset = DWC_SOFT_RESET;
@@ -266,7 +266,7 @@ dwc_soft_reset(void)
     
     do {
         core_reset_reg = readl(&regs->core_reset);
-    } while ((core_reset_reg & DWC_AHB_MASTER_IDLE == false) || 
+    } while (((core_reset_reg & DWC_AHB_MASTER_IDLE) == false) || 
              (core_reset_reg & DWC_SOFT_RESET));
 }
 
@@ -787,7 +787,7 @@ dwc_channel_start_transaction(uint chan, struct usb_xfer_request *req)
     uint next_frame;
     // irqmask im;
 
-    arch_disable_ints(); // im = disable();
+    // arch_disable_ints(); // im = disable();
 
     /* Clear pending interrupts.  */
     chanptr->interrupt_mask.val = 0;
@@ -800,6 +800,8 @@ dwc_channel_start_transaction(uint chan, struct usb_xfer_request *req)
     chanptr->split_control = split_control;
 
     /* Set odd_frame and enable the channel.  */
+    
+    printf("split_control = 0x%x\n", split_control.val);
 
     next_frame = (regs->host_frame_number & 0xffff) + 1;
 
@@ -807,11 +809,10 @@ dwc_channel_start_transaction(uint chan, struct usb_xfer_request *req)
     {
         req->csplit_retries = 0;
     }
-    // characteristics = chanptr->characteristics;
-
+    characteristics.val = readl(&chanptr->characteristics);
     characteristics.odd_frame = next_frame & 1;
     characteristics.channel_enable = 1;
-    chanptr->characteristics = characteristics;
+    // chanptr->characteristics = characteristics;
     writel(characteristics.val, &chanptr->characteristics.val);
 
     /* Set the channel's interrupt mask to any interrupts we need to ensure that
@@ -832,7 +833,7 @@ dwc_channel_start_transaction(uint chan, struct usb_xfer_request *req)
 
     printf("Got Halted Interrupt!\n");
 
-    arch_enable_ints(); // restore(im);
+    // arch_enable_ints(); // restore(im);
 }
 
 /**
@@ -1118,17 +1119,23 @@ dwc_channel_start_xfer(uint chan, struct usb_xfer_request *req)
     chanptr->transfer        = transfer;
 
     // Flush all the caches.
-    arch_clean_invalidate_cache_range(req, sizeof(*req));
-    arch_clean_invalidate_cache_range(vaddr, transfer.size);
+    arch_clean_cache_range(req, sizeof(*req));
+    arch_clean_cache_range(vaddr, transfer.size);
 
     LTRACEF("GSK: Trace Device Address = 0x%x\n", req->dev->address);
-    // hexdump(vaddr, transfer.size);
-    char *hdptr = (char *)vaddr;
+    hexdump(vaddr, transfer.size);
+    uint8_t *hdptr = (uint8_t *)vaddr;
+    uint8_t *buf = malloc(transfer.size);
+    memcpy(buf, hdptr, transfer.size);
+
     for (size_t i = 0; i < transfer.size; i++) {
+        // writel(buf[i], &hdptr[i]);
+        // printf("%x ", hdptr[i]);
         printf("%x ", hdptr[i]);
     }
     printf("\n");
     LTRACEF("\ntransfer.size = 0x%x\n", transfer.size);
+    free(buf);
 
     /* Enable the channel, thereby starting the USB transfer.  After doing this,
      * the next code executed to process this transfer will be in
@@ -1294,6 +1301,9 @@ dwc_handle_normal_channel_halted(struct usb_xfer_request *req, uint chan,
                                  union dwc_host_channel_interrupts interrupts)
 {
     volatile struct dwc_host_channel *chanptr = &regs->host_channels[chan];
+
+    arch_invalidate_cache_range(req, sizeof(*req));
+    arch_invalidate_cache_range(chanptr, sizeof(*chanptr));
 
     /* The hardware seems to update transfer.packet_count as expected, so we can
      * look at it before deciding whether to use transfer.size (which is not
@@ -1645,6 +1655,7 @@ void dwc_interrupt_handler(void)
     // extern int resdefer;
     // resdefer = 1;
 
+    arch_invalidate_cache_range(regs, sizeof(*regs));
     union dwc_core_interrupts interrupts = regs->core_interrupts;
 
 #if START_SPLIT_INTR_TRANSFERS_ON_SOF
@@ -1995,3 +2006,19 @@ hcd_submit_xfer_request(struct usb_xfer_request *req)
     }
     return USB_STATUS_SUCCESS;
 }
+
+// usb_status_t hcd_submit_xfer_request(struct usb_xfer_request *req)
+// {
+//     if (is_root_hub(req->dev)) {
+//         LTRACEF("[USB] Processing Root Hub Transaction.\n");
+//         /* Special case: request is to the root hub.  Fake it. */
+//         dwc_process_root_hub_request(req);
+//     }
+//     else {
+//         /* Normal case: schedule the transfer on some channel.  */
+//         uint chan = dwc_get_free_channel();
+//         dwc_channel_start_xfer(chan, req);
+//     }
+// 
+//     return USB_STATUS_SUCCESS;
+// }

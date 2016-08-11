@@ -69,7 +69,7 @@
 #include <platform/usbcore/usb_std_defs.h>
 #include <platform/usbcore/usb_subsystem.h>
 
-#define LOCAL_TRACE 0
+#define LOCAL_TRACE 1
 
 /** Maximum number of simultaneous USB devices supported.  */
 #define MAX_NUSBDEV 32
@@ -289,7 +289,7 @@ usb_complete_xfer(struct usb_xfer_request *req)
 {
     // irqmask im;
 
-    arch_disable_ints(); // im = disable();
+    // arch_disable_ints(); // im = disable();
 
     --req->dev->xfer_pending_count;
 
@@ -336,7 +336,7 @@ usb_complete_xfer(struct usb_xfer_request *req)
 
     LTRACEF("[USB] usb_complete_xfer completed.\n");
 
-    arch_enable_ints(); // restore(im);
+    // arch_enable_ints(); // restore(im);
 }
 
 static void
