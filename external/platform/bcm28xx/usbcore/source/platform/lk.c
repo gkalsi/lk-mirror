@@ -15,7 +15,7 @@ void MemoryDeallocate(void* address) {
 }
 
 void* MemoryReserve(u32 length, void* physicalAddress) {
-    return physicalAddress + BCM_PERIPH_BASE_VIRT;
+    return physicalAddress;
 }
 
 void MemoryCopy(void* destination, void* source, u32 length) {
@@ -24,16 +24,19 @@ void MemoryCopy(void* destination, void* source, u32 length) {
 
 void LogPrint(const char* message, u32 messageLength) {
     if (!messageLength) return;
-    // message[messageLength - 1] = '\0';
     printf("%s", message);
 }
 
 void MicroDelay(u32 delay) {
-    volatile u64* timeStamp = (u64*)(BCM_PERIPH_BASE_VIRT + 0x20003004);
-    u64 stop = *timeStamp + delay;
+    // volatile u64* timeStamp = (u64*)(ST_BASE + 0x4);
+    // u64 stop = *timeStamp + delay;
 
-    while (*timeStamp < stop) 
-        __asm__("nop");
+    // while (*timeStamp < stop) 
+    //     __asm__("nop");
+
+    for (u64 i = 0; i < delay * 1000; i++) {
+        __asm__("nop");        
+    }
 }
 
 Result PowerOnUsb() {

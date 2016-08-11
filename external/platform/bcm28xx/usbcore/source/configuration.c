@@ -30,9 +30,9 @@ void DwcLoad();
 #ifdef LIB_HID
 void HidLoad();
 #endif
-#ifdef LIB_HUB
+// #ifdef LIB_HUB
 void HubLoad();
-#endif
+// #endif
 #ifdef LIB_KBD
 void KbdLoad();
 #endif
@@ -57,9 +57,9 @@ void ConfigurationLoad() {
 #ifdef LIB_HID
 	HidLoad();
 #endif
-#ifdef LIB_HUB
+// #ifdef LIB_HUB
 	HubLoad();
-#endif
+// #endif
 #ifdef LIB_KBD
 	KbdLoad();
 #endif

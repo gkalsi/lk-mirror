@@ -17,6 +17,8 @@
 #include <usbd/pipe.h>
 #include <usbd/usbd.h>
 #include <reg.h>
+#include <stdio.h>
+#include <arch/ops.h>
 
 #ifndef HCD_DESIGNWARE_BASE
 #error Missing required definition HCD_DESIGNWARE_BASE. Should be of the form ((void*)0xhhhhhhhh). Should be defined after HCD_DESIGNWARE_20 in the platform.
@@ -37,12 +39,12 @@ void WriteThroughReg(volatile const void* reg) {
 	WriteThroughRegMask(reg, 0);
 }
 void WriteThroughRegMask(volatile const void* reg, u32 maskOr) {
-	writel(maskOr, reg);
-	if ((u32)reg - (u32)Core < sizeof(struct CoreGlobalRegs)) {
+
+	if ((uintptr_t)reg - (uintptr_t)Core < sizeof(struct CoreGlobalRegs)) {
 		maskOr |= 0xffffffff;
-		*(u32*)((u32)reg - (u32)Core + (u32)CorePhysical) = *((u32*)reg) & maskOr;
-	} else if ((u32)reg - (u32)Host < sizeof(struct HostGlobalRegs)) {
-		switch ((u32)reg - (u32)Host) {
+		*(u32*)((uintptr_t)reg - (uintptr_t)Core + (uintptr_t)CorePhysical) = *((u32*)reg) & maskOr;
+	} else if ((uintptr_t)reg - (uintptr_t)Host < sizeof(struct HostGlobalRegs)) {
+		switch ((uintptr_t)reg - (uintptr_t)Host) {
 		case 0x40: // Host->Port
 			maskOr |= 0x1f140;
 			break;
@@ -50,34 +52,39 @@ void WriteThroughRegMask(volatile const void* reg, u32 maskOr) {
 			maskOr |= 0xffffffff;
 			break;
 		}
-		*(u32*)((u32)reg - (u32)Host + (u32)HostPhysical) = *((u32*)reg) & maskOr;
-	} else if ((u32)reg == (u32)Power) {
+		*(u32*)((uintptr_t)reg - (uintptr_t)Host + (uintptr_t)HostPhysical) = *((u32*)reg) & maskOr;
+	} else if ((uintptr_t)reg == (uintptr_t)Power) {
 		maskOr |= 0xffffffff;
 		*(u32*)PowerPhysical = *(u32*)Power & maskOr;
 	}
 }
 void ReadBackReg(volatile const void* reg) {
+
 	readl(reg);
-	if ((u32)reg - (u32)Core < sizeof(struct CoreGlobalRegs)) {
-		switch ((u32)reg - (u32)Core) {
+	if ((uintptr_t)reg - (uintptr_t)Core < sizeof(struct CoreGlobalRegs)) {
+		switch ((uintptr_t)reg - (uintptr_t)Core) {
 		case 0x44: // Core->Hardware
-			*((u32*)reg + 0) = *((u32*)((u32)reg - (u32)Core + (u32)CorePhysical) + 0);
-			*((u32*)reg + 1) = *((u32*)((u32)reg - (u32)Core + (u32)CorePhysical) + 1);
-			*((u32*)reg + 2) = *((u32*)((u32)reg - (u32)Core + (u32)CorePhysical) + 2);
-			*((u32*)reg + 3) = *((u32*)((u32)reg - (u32)Core + (u32)CorePhysical) + 3);
+			// *((u32*)reg + 0) = *((u32*)((uintptr_t)reg - (uintptr_t)Core + (uintptr_t)CorePhysical) + 0);
+			// *((u32*)reg + 1) = *((u32*)((uintptr_t)reg - (uintptr_t)Core + (uintptr_t)CorePhysical) + 1);
+			// *((u32*)reg + 2) = *((u32*)((uintptr_t)reg - (uintptr_t)Core + (uintptr_t)CorePhysical) + 2);
+			// *((u32*)reg + 3) = *((u32*)((uintptr_t)reg - (uintptr_t)Core + (uintptr_t)CorePhysical) + 3);
+			*((u32*)reg + 0) = readl((u32*)((uintptr_t)reg - (uintptr_t)Core + (uintptr_t)CorePhysical) + 0);
+			*((u32*)reg + 1) = readl((u32*)((uintptr_t)reg - (uintptr_t)Core + (uintptr_t)CorePhysical) + 1);
+			*((u32*)reg + 2) = readl((u32*)((uintptr_t)reg - (uintptr_t)Core + (uintptr_t)CorePhysical) + 2);
+			*((u32*)reg + 3) = readl((u32*)((uintptr_t)reg - (uintptr_t)Core + (uintptr_t)CorePhysical) + 3);
 			break;
 		default:
-			*(u32*)reg = *(u32*)((u32)reg - (u32)Core + (u32)CorePhysical);
+			*(u32*)reg = readl((uintptr_t)reg - (uintptr_t)Core + (uintptr_t)CorePhysical);
 		}
-	} else if ((u32)reg - (u32)Host < sizeof(struct HostGlobalRegs)) {
-		*(u32*)reg = *(u32*)((u32)reg - (u32)Host + (u32)HostPhysical);
-	} else if ((u32)reg == (u32)Power) {
-		*(u32*)Power = *(u32*)PowerPhysical;
+	} else if ((uintptr_t)reg - (uintptr_t)Host < sizeof(struct HostGlobalRegs)) {
+		*(u32*)reg = readl((u32*)((uintptr_t)reg - (uintptr_t)Host + (uintptr_t)HostPhysical));
+	} else if ((uintptr_t)reg == (uintptr_t)Power) {
+		*(u32*)Power = readl(PowerPhysical);
 	}
 }
 void ClearReg(volatile const void* reg) {
-	if ((u32)reg - (u32)Core < sizeof(struct CoreGlobalRegs)) {
-		switch ((u32)reg - (u32)Core) {
+	if ((uintptr_t)reg - (uintptr_t)Core < sizeof(struct CoreGlobalRegs)) {
+		switch ((uintptr_t)reg - (uintptr_t)Core) {
 		case 0x44: // Core->Hardware
 			*((u32*)reg + 0) = 0;
 			*((u32*)reg + 1) = 0;
@@ -87,17 +94,17 @@ void ClearReg(volatile const void* reg) {
 		default:
 			*(u32*)reg = 0;
 		}
-	} else if ((u32)reg - (u32)Host < sizeof(struct HostGlobalRegs)) {
+	} else if ((uintptr_t)reg - (uintptr_t)Host < sizeof(struct HostGlobalRegs)) {
 		*(u32*)reg = 0;
-	} else if ((u32)reg == (u32)Power) {
+	} else if ((uintptr_t)reg == (uintptr_t)Power) {
 		*(u32*)Power = 0;
 	}
 }
 void SetReg(volatile const void* reg) {
 	u32 value;
-	if ((u32)reg - (u32)Core < sizeof(struct CoreGlobalRegs)) {
+	if ((uintptr_t)reg - (uintptr_t)Core < sizeof(struct CoreGlobalRegs)) {
 		value = 0xffffffff;
-		switch ((u32)reg - (u32)Core) {
+		switch ((uintptr_t)reg - (uintptr_t)Core) {
 		case 0x44: // Core->Hardware
 			*((u32*)reg + 0) = value;
 			*((u32*)reg + 1) = value;
@@ -107,9 +114,9 @@ void SetReg(volatile const void* reg) {
 		default:
 			*(u32*)reg = value;
 		}
-	} else if ((u32)reg - (u32)Host < sizeof(struct HostGlobalRegs)) {
-		if ((u32)reg - (u32)Host > 0x100 && (u32)reg - (u32)Host < 0x300) {
-			switch (((u32)reg - (u32)Host) & 0x1f) {
+	} else if ((uintptr_t)reg - (uintptr_t)Host < sizeof(struct HostGlobalRegs)) {
+		if ((uintptr_t)reg - (uintptr_t)Host > 0x100 && (uintptr_t)reg - (uintptr_t)Host < 0x300) {
+			switch (((uintptr_t)reg - (uintptr_t)Host) & 0x1f) {
 			case 0x8:
 				value = 0x3fff;
 				break;
@@ -121,7 +128,7 @@ void SetReg(volatile const void* reg) {
 			value = 0xffffffff;
 
 		*(u32*)reg = value;
-	} else if ((u32)reg == (u32)Power) {
+	} else if ((uintptr_t)reg == (uintptr_t)Power) {
 		value = 0xffffffff;
 		*(u32*)Power = value;
 	}
@@ -279,7 +286,10 @@ void HcdTransmitChannel(u8 channel, void* buffer) {
 	if (((u32)buffer & 3) != 0)
 		LOG_DEBUGF("HCD: Transfer buffer %#x is not DWORD aligned. Ignored, but dangerous.\n", buffer);
 	Host->Channel[channel].DmaAddress = buffer;
+
 	WriteThroughReg(&Host->Channel[channel].DmaAddress);
+
+	printf("[GSK] Starting Write at Address = %p, DMA Address = %p\n", buffer, Host->Channel[channel].DmaAddress);
 
 	ReadBackReg(&Host->Channel[channel].Characteristic);
 	Host->Channel[channel].Characteristic.PacketsPerFrame = 1;
@@ -349,12 +359,16 @@ Result HcdChannelSendWaitOne(struct UsbDevice *device,
 	Result result;
 	u32 timeout, tries, globalTries, actualTries;
 	
+	arch_clean_cache_range(request, sizeof(*request));
+	arch_clean_cache_range(buffer, bufferLength);
+
 	for (globalTries = 0, actualTries = 0; globalTries < 3 && actualTries < 10; globalTries++, actualTries++) {
 		SetReg(&Host->Channel[channel].Interrupt);
 		WriteThroughReg(&Host->Channel[channel].Interrupt);
 		ReadBackReg(&Host->Channel[channel].TransferSize);
 		ReadBackReg(&Host->Channel[channel].SplitControl);
 						
+		printf("HCD: Write to %p, offset = 0x%x channel = %u\n", buffer, bufferOffset, channel);
 		HcdTransmitChannel(channel, (u8*)buffer + bufferOffset);
 
 		timeout = 0;
@@ -450,6 +464,8 @@ Result HcdChannelSendWaitOne(struct UsbDevice *device,
 		device->Error = ConnectionError;
 		return ErrorTimeout;
 	}
+
+	arch_invalidate_cache_range(buffer, bufferLength);
 
 	return OK;
 }
@@ -573,6 +589,7 @@ Result HcdSumbitControlMessage(struct UsbDevice *device,
 		LOGF("HCD: Could not send STATUS to %s.\n", UsbGetDescription(device));
 		return OK;
 	}
+
 
 	ReadBackReg(&Host->Channel[0].TransferSize);
 	if (Host->Channel[0].TransferSize.TransferSize != 0)

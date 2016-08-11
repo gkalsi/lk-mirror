@@ -133,6 +133,8 @@ Result HcdProcessRootHubMessage(struct UsbDevice *device,
 		return OK;
 	}
 
+	// LOG("Root Hub Message\n");
+
 	replyLength = 0;
 
 	switch (request->Request) {
@@ -239,6 +241,7 @@ Result HcdProcessRootHubMessage(struct UsbDevice *device,
 		case 0x23:
 			switch ((enum HubPortFeature)request->Value) {
 			case FeatureReset:
+				LOG("Root hub reset\n");
 				ReadBackReg(Power);
 				Power->EnableSleepClockGating = false;
 				Power->StopPClock = false;

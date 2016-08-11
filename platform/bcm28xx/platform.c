@@ -29,6 +29,7 @@
 #include <arch.h>
 #include <lk/init.h>
 #include <kernel/vm.h>
+#include <kernel/thread.h>
 #include <kernel/spinlock.h>
 #include <dev/timer/arm_generic.h>
 #include <platform.h>
@@ -36,6 +37,7 @@
 #include <platform/bcm28xx.h>
 
 #include <usbd/usbd.h>
+#include <device/hub.h>
 
 #if BCM2836
 #include <arch/arm.h>
@@ -214,10 +216,13 @@ void platform_early_init(void)
 
 void platform_init(void)
 {
-    Result rs = UsbInitialise();
-    printf("USBD Initialize Returned 0x%x\n", rs);
-
     uart_init();
+
+    Result rs = UsbInitialise();
+    printf("UsbInitialise returned 0x%x\n", rs);
+    if (rs != OK) {
+        return;
+    }
 }
 
 void platform_dputc(char c)

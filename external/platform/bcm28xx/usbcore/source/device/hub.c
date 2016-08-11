@@ -17,6 +17,9 @@
 #include <usbd/descriptors.h>
 #include <usbd/pipe.h>
 #include <usbd/usbd.h>
+#include <stdio.h>
+#include <string.h>
+#include <kernel/thread.h>
 
 #define ControlMessageTimeout 10
 
@@ -194,7 +197,9 @@ Result HubPortReset(struct UsbDevice *device, u8 port) {
 		}
 		timeout = 0;
 		do {
-			MicroDelay(20000);
+			// MicroDelay(20000);
+			thread_sleep(20);
+
 			if ((result = HubPortGetStatus(device, port)) != OK) {
 				LOGF("HUB: Hub failed to get status (4) for %s.Port%d.\n", UsbGetDescription(device), port + 1);
 				return result;
@@ -207,8 +212,10 @@ Result HubPortReset(struct UsbDevice *device, u8 port) {
 		
 		LOG_DEBUGF("HUB: %s.Port%d Status %x:%x.\n", UsbGetDescription(device), port + 1, *(u16*)&portStatus->Status, *(u16*)&portStatus->Change);
 
-		if (portStatus->Change.ConnectedChanged || !portStatus->Status.Connected)
+
+		if (portStatus->Change.ConnectedChanged || !portStatus->Status.Connected) {
 			return ErrorDevice;
+		}
 
 		if (portStatus->Status.Enabled) 
 			break;
@@ -455,13 +462,20 @@ Result HubAttach(struct UsbDevice *device, u32 interfaceNumber) {
 		LOG("HUB: Cannot allocate hub data. Out of memory.\n");
 		return ErrorMemory;
 	}
+
+	memset(device->DriverData, 0, sizeof(struct HubDevice));
+
 	data = (struct HubDevice*)device->DriverData;
 	device->DriverData->DataSize = sizeof(struct HubDevice);
 	device->DriverData->DeviceDriver = DeviceDriverHub;
 	for (u32 i = 0; i < MaxChildrenPerDevice; i++)
 		data->Children[i] = NULL;
 
+	LOG("Attempting to read Hub descriptor.\n");
+
 	if ((result = HubReadDescriptor(device)) != OK) return result;
+
+	LOG("Successfully read hub descriptor.\n");
 
 	hubDescriptor = data->Descriptor;
 	if (hubDescriptor->PortCount > MaxChildrenPerDevice) {

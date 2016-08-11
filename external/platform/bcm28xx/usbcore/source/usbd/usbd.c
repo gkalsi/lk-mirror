@@ -82,7 +82,7 @@ Result UsbControlMessage(struct UsbDevice *device,
 	Result result;
 
 	if (((u32)buffer & 0x3) != 0)
-		LOG_DEBUG("USBD: Warning message buffer not word aligned.\n");
+		LOG_DEBUGF("USBD: Warning message buffer not word aligned. Buffer = %p\n", buffer);
 	result = HcdSumbitControlMessage(device, pipe, buffer, bufferLength, request);
 
 	if (result != OK) {
@@ -642,6 +642,8 @@ Result UsbAttachRootHub() {
 
 void UsbCheckForChange() {
 	if (Devices[0] != NULL &&
-		Devices[0]->DeviceCheckForChange != NULL)
+		Devices[0]->DeviceCheckForChange != NULL) {
 		Devices[0]->DeviceCheckForChange(Devices[0]);
+		LOG_DEBUG("Check for changes on device 0\n");
+	}
 }
